@@ -44,7 +44,7 @@ unordered_map<int, Rabbit> rabbits;
 stringstream readinput()
 {
     string filename;
-    cout<<"Ingrese el nombre del archivo: ";
+    //cout<<"Ingrese el nombre del archivo: ";
     getline(cin, filename);
     ifstream file(filename);
     while (!file) {
@@ -62,12 +62,43 @@ stringstream readinput()
 }
 
 void printMat(int R, int C, int gen = -1){
-    cout<<"Gen "<<gen<<endl;
+    cout<<"Generation "<<gen<<endl;
+    for (int i = 0; i<C+2; i++)
+    {
+        cout<<"-";
+    }
+    cout<<"   ";
+    for (int i = 0; i<C+2; i++)
+    {
+        cout<<"-";
+    }
+    cout<<" ";
     for (int i = 0; i<C+2; i++)
     {
         cout<<"-";
     }
     cout<<endl;
+    char matc1[R][C];
+    char matc2[R][C];
+    for (int i = 0; i<R; i++)
+    {
+        for (int j = 0; j<C; j++)
+        {
+            matc1[i][j] = mat[i][j];
+            matc2[i][j] = mat[i][j];
+        }
+    }
+    for (auto rabbit : rabbits)
+    {
+        matc1[rabbit.second.x][rabbit.second.y] = '0'+(gen-rabbit.second.birthgen)%(GEN_PROC_RABBITS+1);
+        matc2[rabbit.second.x][rabbit.second.y] = 'R';
+    }
+    for (auto fox : foxes)
+    {
+        matc1[fox.second.x][fox.second.y] = '0' + (gen-fox.second.birthgen)%(GEN_PROC_FOXES+1);
+        matc2[fox.second.x][fox.second.y] = '0' + (gen-1-fox.second.lasteat);
+    }
+
     for (int i = 0; i<R; i++)
     {
         cout<<"|";
@@ -75,12 +106,35 @@ void printMat(int R, int C, int gen = -1){
         {
             cout<<mat[i][j];
         }
+        cout<<"|   ";
+        cout<<"|";
+        for (int j = 0; j<C; j++)
+        {
+            cout<<matc1[i][j];
+        }
+        cout<<"| ";
+        cout<<"|";
+        for (int j = 0; j<C; j++)
+        {
+            cout<<matc2[i][j];
+        }
         cout<<"|"<<endl;
     }
     for (int i = 0; i<C+2; i++)
     {
         cout<<"-";
     }
+    cout<<"   ";
+    for (int i = 0; i<C+2; i++)
+    {
+        cout<<"-";
+    }
+    cout<<" ";
+    for (int i = 0; i<C+2; i++)
+    {
+        cout<<"-";
+    }
+    cout<<endl;
     cout<<endl;
 }
 
@@ -113,7 +167,9 @@ void generation(int remaininGens)
         vector<array<int, 3>> movements = {};
         vector<int> deleteID = {};
         
-        for (auto& rabbit : rabbits) //can be parallelized, but all threads show reference the same movements vector
+        auto rabbitsC = unordered_map<int, Rabbit>(rabbits);
+        auto foxesC = unordered_map<int, Fox>(foxes);
+        for (auto& rabbit : rabbitsC) //can be parallelized, but all threads show reference the same movements vector
         {
             int x = rabbit.second.x, y = rabbit.second.y;
             vector<pair<int,int>> dirs = {make_pair(x-1, y),make_pair(x, y+1),make_pair(x+1, y), make_pair(x, y-1)};
@@ -123,7 +179,7 @@ void generation(int remaininGens)
                 int dx = dirs[d].first, dy = dirs[d].second;
                 if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == ' ')
                 {
-                    cout<<"opt for "<<rabbit.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                    //cout<<"opt for "<<rabbit.first<<" x:"<<dx<<" y:"<<dy<<endl;
                     fdirs.push_back(dirs[d]);
 
                 }
@@ -134,7 +190,7 @@ void generation(int remaininGens)
                 //rabbit can move to |fdirs| directions
                 int chosen = (currentGen+x+y)%fdirs.size();
                 int dx = fdirs[chosen].first, dy = fdirs[chosen].second;
-                cout<<"chosen for "<<rabbit.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                //cout<<"chosen for "<<rabbit.first<<" x:"<<dx<<" y:"<<dy<<endl;
                 int othermovment = -1;
                 for (int m = 0; m<movements.size(); m++)
                 {
@@ -144,10 +200,21 @@ void generation(int remaininGens)
                         break;
                     }
                 }
+                //cout<<"rabbit in "<<rabbit.second.x<<", "<<rabbit.second.y<<" will move to "<<dx<<", "<<dy<<endl;
+                if ((currentGen+1-rabbit.second.birthgen)%(GEN_PROC_RABBITS+1) == 0)
+                {
+                    Rabbit nr;
+                    nr.x = rabbit.second.x;
+                    nr.y = rabbit.second.y; 
+                    nr.birthgen = currentGen+1; 
+                    //cout<<"new rabbit in "<<nr.x<<", "<<nr.y<<" with id"<<rabbitsID<<endl;
+                    rabbits.insert({rabbitsID, nr});
+                    rabbitsID++;
+                }
                 if (othermovment >= 0) //if there is another rabbit moving there
                 {
                     int otherrabbit = movements[othermovment][0];
-                    if (currentGen-rabbit.second.birthgen > currentGen-rabbits[otherrabbit].birthgen) //esto no es claro en el enunciado, puede ser también 
+                    if ((currentGen-rabbit.second.birthgen)%(GEN_PROC_RABBITS+1) > (currentGen-rabbits[otherrabbit].birthgen)%(GEN_PROC_RABBITS+1)) //esto no es claro en el enunciado
                     {
                         //borra conejo antes de el actual
                         deleteID.push_back(otherrabbit);  
@@ -167,33 +234,41 @@ void generation(int remaininGens)
         //commit movements
         for (int i = 0; i< deleteID.size(); i++)
         {
+            //cout<<"delete rabbit in "<<rabbits[deleteID[i]].x<<", "<<rabbits[deleteID[i]].y<<endl;
             rabbits.erase(deleteID[i]);
         }
         for (int i = 0; i < movements.size(); i++)
         {
             Rabbit rabbit = rabbits[movements[i][0]];
-            if ((currentGen-rabbit.birthgen+1)%(GEN_PROC_RABBITS+1) == 0)
-            {
-                Rabbit nr;
-                nr.x = rabbit.x;
-                nr.y = rabbit.y; 
-                nr.birthgen = currentGen+1; 
-                mat[rabbit.x][rabbit.y] = 'R';
-                rabbits.insert({rabbitsID, nr});
-                rabbitsID++;
-            }else{
-                mat[rabbit.x][rabbit.y] = ' '; //agregar aquí el tema de la reproduccion
-            }
             rabbit.x = movements[i][1];
             rabbit.y = movements[i][2];
-            mat[rabbit.x][rabbit.y] = 'R';
             rabbits[movements[i][0]] = rabbit;
         }
+        //actualizar matriz
+        for (int i = 0; i<MAXR; i++)
+        {
+            for (int j = 0; j<MAXC; j++)
+            {
+                if (mat[i][j] != '*')
+                {
+                    mat[i][j] = ' ';
+                }
+            }
+        }
+        for (auto& fox : foxes)
+        {
+            mat[fox.second.x][fox.second.y] = 'F';
+        }
+        for (auto& rab : rabbits)
+        {
+            mat[rab.second.x][rab.second.y] = 'R';
+        }
+
         //move foxes
         movements = {};
         deleteID = {};
         
-        for (auto& fox : foxes) //can be parallelized, but all threads show reference the same movements vector
+        for (auto& fox : foxesC) //can be parallelized, but all threads show reference the same movements vector
         {
             int x = fox.second.x, y = fox.second.y;
             vector<pair<int,int>> dirs = {make_pair(x-1, y),make_pair(x, y+1),make_pair(x+1, y), make_pair(x, y-1)};
@@ -203,7 +278,7 @@ void generation(int remaininGens)
                 int dx = dirs[d].first, dy = dirs[d].second;
                 if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == 'R')
                 {
-                    cout<<"opt for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                    //cout<<"opt for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
                     fdirs.push_back(dirs[d]);
                 }
             }
@@ -213,7 +288,7 @@ void generation(int remaininGens)
                     int dx = dirs[d].first, dy = dirs[d].second;
                     if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == ' ')
                     {
-                        cout<<"opt for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                        //cout<<"opt for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
                         fdirs.push_back(dirs[d]);
                     }
                 }
@@ -224,7 +299,7 @@ void generation(int remaininGens)
                 //fox can move to |fdirs| directions
                 int chosen = (currentGen+x+y)%fdirs.size();
                 int dx = fdirs[chosen].first, dy = fdirs[chosen].second;
-                cout<<"chosen for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                //cout<<"chosen for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
                 int othermovment = -1;
                 for (int m = 0; m<movements.size(); m++)
                 {
@@ -234,15 +309,36 @@ void generation(int remaininGens)
                         break;
                     }
                 }
+                
+                //si va a reproducirse y no se va a morir de hambre
+                if ((currentGen+1-fox.second.birthgen)%(GEN_PROC_FOXES+1) == 0 && (currentGen-fox.second.lasteat < GEN_FOOD_FOXES || mat[dx][dy] == 'R'))
+                {
+                    Fox nf;
+                    nf.x = fox.second.x;
+                    nf.y = fox.second.y; 
+                    nf.birthgen = currentGen+1; 
+                    nf.lasteat = currentGen;
+                    foxes.insert({foxesID, nf});
+                    foxesID++;
+                }
                 if (othermovment >= 0) //if there is another fox moving there
                 {
+                    //cout<<"comparing"<<endl;
+                    //cout<<"fox in "<<fox.second.x<<", "<<fox.second.y<<" will move to "<<dx<<", "<<dy<<"with proc age: "<<(currentGen-fox.second.birthgen)%(GEN_PROC_FOXES+1)<<endl;    
                     int otherfox = movements[othermovment][0];
-                    if (currentGen-fox.second.birthgen > currentGen-foxes[otherfox].birthgen) //esto no es claro en el enunciado, puede ser también 
+                    int a = (currentGen-fox.second.birthgen)%(GEN_PROC_FOXES+1);
+                    int b = (currentGen-foxes[otherfox].birthgen)%(GEN_PROC_FOXES+1);
+                    //cout<<"fox in "<<foxes[otherfox].x<<", "<<foxes[otherfox].y<<" will move to "<<dx<<", "<<dy<<"with proc age: "<<((currentGen-foxes[otherfox].birthgen)%(GEN_PROC_FOXES+1))<<endl;
+
+                    if (a > b) //esto no es claro en el enunciado, puede ser también 
                     {
                         //delete the other fox
                         deleteID.push_back(otherfox);  
                         movements[othermovment][0] = fox.first;
-                    }else if (currentGen-fox.second.birthgen == currentGen-fox.second.birthgen){ 
+                    }else if (a == b){ 
+                        //cout<<"Birth gen is the same!!"<<endl;
+                        //cout<<"first fox time without eat: "<<currentGen-fox.second.lasteat<<endl;
+                        //cout<<"second fox time without eat: "<<currentGen-foxes[otherfox].lasteat<<endl;
                         if (currentGen-fox.second.lasteat > currentGen-foxes[otherfox].lasteat)
                         {
                             deleteID.push_back(fox.first);  
@@ -266,10 +362,9 @@ void generation(int remaininGens)
         //commit movements
         for (int i = 0; i< deleteID.size(); i++)
         {
+            //cout<<"delete fox in "<<foxes[deleteID[i]].x<<", "<<foxes[deleteID[i]].y<<endl;
             foxes.erase(deleteID[i]);
         }
-        
-        
         
         for (int i = 0; i < movements.size(); i++)
         {
@@ -280,19 +375,7 @@ void generation(int remaininGens)
                 continue;
             }
 
-            if ((currentGen+1-fox.birthgen)%(GEN_PROC_FOXES+1) == 0)
-            {
-                Fox nf;
-                nf.x = fox.x;
-                nf.y = fox.y; 
-                nf.birthgen = currentGen+1; 
-                nf.lasteat = currentGen;
-                mat[fox.x][fox.y] = 'F';
-                foxes.insert({foxesID, nf});
-                foxesID++;
-            }else{
-                mat[fox.x][fox.y] = ' ';
-            }
+
             fox.x = movements[i][1];
             fox.y = movements[i][2];
             if (mat[fox.x][fox.y] == 'R') //kill the rabbit in that cel
@@ -309,29 +392,46 @@ void generation(int remaininGens)
                 rabbits.erase(r);
                 fox.lasteat = currentGen;
             }
-            mat[fox.x][fox.y] = 'F';
             foxes[movements[i][0]] = fox;
         }
         deleteID = {};
         for (auto& fox: foxes)
         {
-            cout<<"fox "<<fox.first<<" lasteat: "<<fox.second.lasteat<<" currgen:" << currentGen<<endl;
+            //cout<<"fox "<<fox.first<<" lasteat: "<<fox.second.lasteat<<" currgen:" << currentGen<<endl;
 
             if (currentGen-fox.second.lasteat >= GEN_FOOD_FOXES) //fox die of starvation
             {
-                cout<<"will delete "<<fox.first<<endl;
+                //cout<<"will delete "<<fox.first<<endl;
                 deleteID.push_back(fox.first);
             }
         }
         for (int i = 0; i<deleteID.size(); i++)
         {
             Fox f = foxes[deleteID[i]];
-            mat[f.x][f.y] = ' ';
-            cout<<"killing fox "<<deleteID[i]<<"x: "<<f.x<<" y: "<<f.y<<endl;
+            //cout<<"killing fox "<<deleteID[i]<<"x: "<<f.x<<" y: "<<f.y<<endl;
             foxes.erase(deleteID[i]);
         }
         deleteID = {};
         
+        //actualizar la matriz
+        for (int i = 0; i<MAXR; i++)
+        {
+            for (int j = 0; j<MAXC; j++)
+            {
+                if (mat[i][j] != '*')
+                {
+                    mat[i][j] = ' ';
+                }
+            }
+        }
+        for (auto& fox : foxes)
+        {
+            mat[fox.second.x][fox.second.y] = 'F';
+        }
+        for (auto& rab : rabbits)
+        {
+            mat[rab.second.x][rab.second.y] = 'R';
+        }
 
         generation(remaininGens-1);
     }
@@ -348,14 +448,14 @@ int main() {
     
     stringstream input = readinput();
     input>>GEN_PROC_RABBITS>>GEN_PROC_FOXES>>GEN_FOOD_FOXES>>N_GEN>>R>>C>>N;
-    cout<<"DATOS LEIDOS: \n"<<GEN_PROC_RABBITS<<" "<<GEN_PROC_FOXES<<" "<<GEN_FOOD_FOXES<<" "<<N_GEN<<" "<<R<<" "<<C<<" "<<N<<endl;
+    //cout<<"DATOS LEIDOS: \n"<<GEN_PROC_RABBITS<<" "<<GEN_PROC_FOXES<<" "<<GEN_FOOD_FOXES<<" "<<N_GEN<<" "<<R<<" "<<C<<" "<<N<<endl;
     int rockcount = 0;
     for (int n = 0; n<N; n++)
     {
         string type;
         int posx, posy;
         input>>type>>posx>>posy;
-        cout<<type<<" "<<posx<<" "<<posy<<" "<<endl;
+        //cout<<type<<" "<<posx<<" "<<posy<<" "<<endl;
         if (type == "ROCK")
         {
             mat[posx][posy] = '*';   
