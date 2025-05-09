@@ -5,6 +5,8 @@
 #include <vector>
 #include <array>
 #include <unordered_map>
+#include <omp.h>
+#include <mutex>
 
 #define MAXR 200
 #define MAXC 200
@@ -169,67 +171,71 @@ void generation(int remaininGens)
         
         auto rabbitsC = unordered_map<int, Rabbit>(rabbits);
         auto foxesC = unordered_map<int, Fox>(foxes);
-
-        for (auto& rabbit : rabbitsC) //can be parallelized, but all threads show reference the same movements vector
+        
+        #pragma omp parallel for
+        for (int i = 0; i < rabbitsC.size(); ++i)
         {
-            int x = rabbit.second.x, y = rabbit.second.y;
-            vector<pair<int,int>> dirs = {make_pair(x-1, y),make_pair(x, y+1),make_pair(x+1, y), make_pair(x, y-1)};
-            vector<pair<int,int>> fdirs = {};
-            for (int d = 0; d<dirs.size(); d++) //add available dirs to f dirs, can't be parallelized due to order stuff
-            {
-                int dx = dirs[d].first, dy = dirs[d].second;
-                if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == ' ')
-                {
-                    //cout<<"opt for "<<rabbit.first<<" x:"<<dx<<" y:"<<dy<<endl;
-                    fdirs.push_back(dirs[d]);
+            auto it = next(rabbitsC.begin(), i);
+            int id = it->first;
+            Rabbit& rabbit = it->second;
+            int x = rabbit.x, y = rabbit.y;
 
+            vector<pair<int,int>> dirs = {{x-1, y}, {x, y+1}, {x+1, y}, {x, y-1}};
+            vector<pair<int,int>> fdirs;
+
+            for (int d = 0; d < dirs.size(); ++d) {
+                int dx = dirs[d].first, dy = dirs[d].second;
+                if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == ' ') {
+                    fdirs.push_back(dirs[d]);
                 }
             }
 
-            if (fdirs.size() > 0)
-            {
-                //rabbit can move to |fdirs| directions
-                int chosen = (currentGen+x+y)%fdirs.size();
+            if (!fdirs.empty()) {
+                int chosen = (currentGen + x + y) % fdirs.size();
                 int dx = fdirs[chosen].first, dy = fdirs[chosen].second;
-                //cout<<"chosen for "<<rabbit.first<<" x:"<<dx<<" y:"<<dy<<endl;
+
                 int othermovment = -1;
-                for (int m = 0; m<movements.size(); m++)
+                #pragma omp critical(movements_read)
                 {
-                    if (movements[m][1] == dx && movements[m][2] == dy)
-                    {
-                        othermovment = m;
-                        break;
+                    for (int m = 0; m < movements.size(); ++m) {
+                        if (movements[m][1] == dx && movements[m][2] == dy) {
+                            othermovment = m;
+                            break;
+                        }
                     }
                 }
-                //cout<<"rabbit in "<<rabbit.second.x<<", "<<rabbit.second.y<<" will move to "<<dx<<", "<<dy<<endl;
-                if ((currentGen+1-rabbit.second.birthgen)%(GEN_PROC_RABBITS+1) == 0)
-                {
+
+                if ((currentGen + 1 - rabbit.birthgen) % (GEN_PROC_RABBITS + 1) == 0) {
                     Rabbit nr;
-                    nr.x = rabbit.second.x;
-                    nr.y = rabbit.second.y; 
-                    nr.birthgen = currentGen+1; 
-                    //cout<<"new rabbit in "<<nr.x<<", "<<nr.y<<" with id"<<rabbitsID<<endl;
-                    rabbits.insert({rabbitsID, nr});
-                    rabbitsID++;
-                }
-                if (othermovment >= 0) //if there is another rabbit moving there
-                {
-                    int otherrabbit = movements[othermovment][0];
-                    if ((currentGen-rabbit.second.birthgen)%(GEN_PROC_RABBITS+1) > (currentGen-rabbits[otherrabbit].birthgen)%(GEN_PROC_RABBITS+1)) //esto no es claro en el enunciado
+                    nr.x = x;
+                    nr.y = y;
+                    nr.birthgen = currentGen + 1;
+                    #pragma omp critical(insert_rabbit)
                     {
-                        //borra conejo antes de el actual
-                        deleteID.push_back(otherrabbit);  
-                        movements[othermovment][0] = rabbit.first;
-                    }else{ 
-                        //borra el conejo actual
-                        deleteID.push_back(rabbit.first);  
-                        movements[othermovment][0] = otherrabbit;
+                        rabbits.insert({rabbitsID, nr});
+                        rabbitsID++;
                     }
-                }else{
-                    movements.push_back({rabbit.first, dx, dy});
                 }
-            }else{
-                //rabbit can't move
+
+                if (othermovment >= 0) {
+                    #pragma omp critical(update_conflict)
+                    {
+                        int otherrabbit = movements[othermovment][0];
+                        if ((currentGen - rabbit.birthgen) % (GEN_PROC_RABBITS + 1) >
+                            (currentGen - rabbits[otherrabbit].birthgen) % (GEN_PROC_RABBITS + 1)) {
+                            deleteID.push_back(otherrabbit);  
+                            movements[othermovment][0] = id;
+                        } else {
+                            deleteID.push_back(id);  
+                            movements[othermovment][0] = otherrabbit;
+                        }
+                    }
+                } else {
+                    #pragma omp critical(push_movement)
+                    {
+                        movements.push_back({id, dx, dy});
+                    }
+                }
             }
         }
         //commit movements
@@ -246,122 +252,122 @@ void generation(int remaininGens)
             rabbits[movements[i][0]] = rabbit;
         }
         //actualizar matriz
-        for (int i = 0; i<MAXR; i++)
-        {
-            for (int j = 0; j<MAXC; j++)
-            {
-                if (mat[i][j] != '*')
-                {
+        #pragma omp parallel for collapse(2)
+        for (int i = 0; i < MAXR; i++) {
+            for (int j = 0; j < MAXC; j++) {
+                if (mat[i][j] != '*') {
                     mat[i][j] = ' ';
                 }
             }
         }
-        for (auto& fox : foxes)
-        {
-            mat[fox.second.x][fox.second.y] = 'F';
+
+        #pragma omp parallel for
+        for (int i = 0; i < foxes.size(); ++i) {
+            auto it = next(foxes.begin(), i);
+            mat[it->second.x][it->second.y] = 'F';
         }
-        for (auto& rab : rabbits)
-        {
-            mat[rab.second.x][rab.second.y] = 'R';
+
+        #pragma omp parallel for
+        for (int i = 0; i < rabbits.size(); ++i) {
+            auto it = next(rabbits.begin(), i);
+            mat[it->second.x][it->second.y] = 'R';
         }
 
         //move foxes
         movements = {};
         deleteID = {};
         
-        for (auto& fox : foxesC) //can be parallelized, but all threads show reference the same movements vector
+        #pragma omp parallel for
+        for (int i = 0; i < foxesC.size(); ++i)
         {
-            int x = fox.second.x, y = fox.second.y;
-            vector<pair<int,int>> dirs = {make_pair(x-1, y),make_pair(x, y+1),make_pair(x+1, y), make_pair(x, y-1)};
-            vector<pair<int,int>> fdirs = {};
-            for (int d = 0; d<dirs.size(); d++) //add available rabbit positions dirs to f dirs, can't be parallelized due to order stuff
-            {
+            auto it = next(foxesC.begin(), i);
+            int id = it->first;
+            Fox& fox = it->second;
+            int x = fox.x, y = fox.y;
+
+            vector<pair<int,int>> dirs = {{x-1, y}, {x, y+1}, {x+1, y}, {x, y-1}};
+            vector<pair<int,int>> fdirs;
+
+            for (int d = 0; d < dirs.size(); ++d) {
                 int dx = dirs[d].first, dy = dirs[d].second;
-                if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == 'R')
-                {
-                    //cout<<"opt for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == 'R') {
                     fdirs.push_back(dirs[d]);
                 }
             }
-            if (fdirs.size() == 0){
-                for (int d = 0; d<dirs.size(); d++) //add available positions dirs to f dirs, can't be parallelized due to order stuff
-                {
+
+            if (fdirs.empty()) {
+                for (int d = 0; d < dirs.size(); ++d) {
                     int dx = dirs[d].first, dy = dirs[d].second;
-                    if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == ' ')
-                    {
-                        //cout<<"opt for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
+                    if (dx >= 0 && dy >= 0 && dx < R && dy < C && mat[dx][dy] == ' ') {
                         fdirs.push_back(dirs[d]);
                     }
                 }
             }
 
-            if (fdirs.size() > 0)
-            {
-                //fox can move to |fdirs| directions
-                int chosen = (currentGen+x+y)%fdirs.size();
+            if (!fdirs.empty()) {
+                int chosen = (currentGen + x + y) % fdirs.size();
                 int dx = fdirs[chosen].first, dy = fdirs[chosen].second;
-                //cout<<"chosen for "<<fox.first<<" x:"<<dx<<" y:"<<dy<<endl;
-                int othermovment = -1;
-                for (int m = 0; m<movements.size(); m++)
+
+                int othermovement = -1;
+                #pragma omp critical(movement_read)
                 {
-                    if (movements[m][1] == dx && movements[m][2] == dy)
-                    {
-                        othermovment = m;
-                        break;
+                    for (int m = 0; m < movements.size(); ++m) {
+                        if (movements[m][1] == dx && movements[m][2] == dy) {
+                            othermovement = m;
+                            break;
+                        }
                     }
                 }
-                
-                //si va a reproducirse y no se va a morir de hambre
-                if ((currentGen+1-fox.second.birthgen)%(GEN_PROC_FOXES+1) == 0 && (currentGen-fox.second.lasteat < GEN_FOOD_FOXES || mat[dx][dy] == 'R'))
+
+                if ((currentGen + 1 - fox.birthgen) % (GEN_PROC_FOXES + 1) == 0 &&
+                    (currentGen - fox.lasteat < GEN_FOOD_FOXES || mat[dx][dy] == 'R')) 
                 {
                     Fox nf;
-                    nf.x = fox.second.x;
-                    nf.y = fox.second.y; 
-                    nf.birthgen = currentGen+1; 
+                    nf.x = x;
+                    nf.y = y;
+                    nf.birthgen = currentGen + 1;
                     nf.lasteat = currentGen;
-                    foxes.insert({foxesID, nf});
-                    foxesID++;
-                }
-                if (othermovment >= 0) //if there is another fox moving there
-                {
-                    //cout<<"comparing"<<endl;
-                    //cout<<"fox in "<<fox.second.x<<", "<<fox.second.y<<" will move to "<<dx<<", "<<dy<<"with proc age: "<<(currentGen-fox.second.birthgen)%(GEN_PROC_FOXES+1)<<endl;    
-                    int otherfox = movements[othermovment][0];
-                    int a = (currentGen-fox.second.birthgen)%(GEN_PROC_FOXES+1);
-                    int b = (currentGen-foxes[otherfox].birthgen)%(GEN_PROC_FOXES+1);
-                    //cout<<"fox in "<<foxes[otherfox].x<<", "<<foxes[otherfox].y<<" will move to "<<dx<<", "<<dy<<"with proc age: "<<((currentGen-foxes[otherfox].birthgen)%(GEN_PROC_FOXES+1))<<endl;
 
-                    if (a > b) //esto no es claro en el enunciado, puede ser también 
+                    #pragma omp critical(insert_fox)
                     {
-                        //delete the other fox
-                        deleteID.push_back(otherfox);  
-                        movements[othermovment][0] = fox.first;
-                    }else if (a == b){ 
-                        //cout<<"Birth gen is the same!!"<<endl;
-                        //cout<<"first fox time without eat: "<<currentGen-fox.second.lasteat<<endl;
-                        //cout<<"second fox time without eat: "<<currentGen-foxes[otherfox].lasteat<<endl;
-                        if (currentGen-fox.second.lasteat > currentGen-foxes[otherfox].lasteat)
-                        {
-                            deleteID.push_back(fox.first);  
-                            movements[othermovment][0] = otherfox;
-                        }else{
-                            deleteID.push_back(otherfox);  
-                            movements[othermovment][0] = fox.first;
-                        }
-                    }else{ 
-                        //deletes current fox
-                        deleteID.push_back(fox.first);  
-                        movements[othermovment][0] = otherfox;
+                        foxes.insert({foxesID, nf});
+                        foxesID++;
                     }
-                }else{
-                    movements.push_back({fox.first, dx, dy});
                 }
-            }else{
-                //fox can't move
+
+                if (othermovement >= 0) {
+                    #pragma omp critical(conflict_resolution)
+                    {
+                        int otherfox = movements[othermovement][0];
+                        int a = (currentGen - fox.birthgen) % (GEN_PROC_FOXES + 1);
+                        int b = (currentGen - foxes[otherfox].birthgen) % (GEN_PROC_FOXES + 1);
+
+                        if (a > b) {
+                            deleteID.push_back(otherfox);
+                            movements[othermovement][0] = id;
+                        } else if (a == b) {
+                            if (currentGen - fox.lasteat > currentGen - foxes[otherfox].lasteat) {
+                                deleteID.push_back(id);
+                                movements[othermovement][0] = otherfox;
+                            } else {
+                                deleteID.push_back(otherfox);
+                                movements[othermovement][0] = id;
+                            }
+                        } else {
+                            deleteID.push_back(id);
+                            movements[othermovement][0] = otherfox;
+                        }
+                    }
+                } else {
+                    #pragma omp critical(push_movement)
+                    {
+                        movements.push_back({id, dx, dy});
+                    }
+                }
             }
         }
         //commit movements
-        for (int i = 0; i< deleteID.size(); i++)
+        for (int i = 0; i< deleteID.size(); i++) //cant be parallelized
         {
             //cout<<"delete fox in "<<foxes[deleteID[i]].x<<", "<<foxes[deleteID[i]].y<<endl;
             foxes.erase(deleteID[i]);
@@ -370,13 +376,11 @@ void generation(int remaininGens)
         for (int i = 0; i < movements.size(); i++)
         {
             Fox fox = foxes[movements[i][0]];
-            //si no encontro conejo y se va a morir de hambre, no puede moverse
+            //if couldn't find nothing to eat and will die if doesn't eat
             if (mat[movements[i][1]][movements[i][2]] != 'R' && currentGen-fox.lasteat >= GEN_FOOD_FOXES)
             {
                 continue;
             }
-
-
             fox.x = movements[i][1];
             fox.y = movements[i][2];
             if (mat[fox.x][fox.y] == 'R') //kill the rabbit in that cel
@@ -396,7 +400,7 @@ void generation(int remaininGens)
             foxes[movements[i][0]] = fox;
         }
         deleteID = {};
-        for (auto& fox: foxes)
+        for (auto& fox: foxes) //can be parallelized, but it's not worth it because of deleteID vector
         {
             //cout<<"fox "<<fox.first<<" lasteat: "<<fox.second.lasteat<<" currgen:" << currentGen<<endl;
             if (currentGen-fox.second.lasteat >= GEN_FOOD_FOXES) //fox die of starvation
@@ -405,7 +409,7 @@ void generation(int remaininGens)
                 deleteID.push_back(fox.first);
             }
         }
-        for (int i = 0; i<deleteID.size(); i++)
+        for (int i = 0; i<deleteID.size(); i++) //can be parallelized, but it's not worth it because of foxes vector
         {
             Fox f = foxes[deleteID[i]];
             //cout<<"killing fox "<<deleteID[i]<<"x: "<<f.x<<" y: "<<f.y<<endl;
@@ -414,25 +418,26 @@ void generation(int remaininGens)
         deleteID = {};
         
         //actualizar la matriz
-        for (int i = 0; i<MAXR; i++)
-        {
-            for (int j = 0; j<MAXC; j++)
-            {
-                if (mat[i][j] != '*')
-                {
+        #pragma omp parallel for collapse(2)
+        for (int i = 0; i < MAXR; i++) {
+            for (int j = 0; j < MAXC; j++) {
+                if (mat[i][j] != '*') {
                     mat[i][j] = ' ';
                 }
             }
         }
-        for (auto& fox : foxes)
-        {
-            mat[fox.second.x][fox.second.y] = 'F';
-        }
-        for (auto& rab : rabbits)
-        {
-            mat[rab.second.x][rab.second.y] = 'R';
+
+        #pragma omp parallel for
+        for (int i = 0; i < foxes.size(); ++i) {
+            auto it = next(foxes.begin(), i);
+            mat[it->second.x][it->second.y] = 'F';
         }
 
+        #pragma omp parallel for
+        for (int i = 0; i < rabbits.size(); ++i) {
+            auto it = next(rabbits.begin(), i);
+            mat[it->second.x][it->second.y] = 'R';
+        }
         generation(remaininGens-1);
     }
 }
